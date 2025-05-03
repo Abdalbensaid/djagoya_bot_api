@@ -262,11 +262,53 @@ class MessageHandler
 
     protected function escapeMarkdown(string $text): string
     {
+        // Liste complète des caractères à échapper pour MarkdownV2
         $charsToEscape = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'];
-        foreach ($charsToEscape as $char) {
-            $text = str_replace($char, '\\'.$char, $text);
+        
+        return preg_replace_callback('/['.preg_quote(implode('', $charsToEscape), '/').']/', 
+            function ($match) { return '\\'.$match[0]; }, 
+            $text);
+    }
+
+    protected function initProductSession(array $message)
+    {
+        try {
+            $telegramId = $message['from']['id'];
+            $user = User::where('telegram_id', $telegramId)->first();
+
+            if (!$user) {
+                $this->sendMessage(
+                    $this->escapeMarkdown("❌ Vous devez d'abord créer un compte avec /start"),
+                    'MarkdownV2'
+                );
+                return;
+            }
+
+            if ($user->role !== 'commercant') {
+                $this->sendMessage(
+                    $this->escapeMarkdown("🚫 Réservé aux commerçants.\nPour devenir commerçant, envoyez /register_commercant"),
+                    'MarkdownV2'
+                );
+                return;
+            }
+
+            ProductSession::updateOrCreate(
+                ['user_id' => $user->id],
+                ['step' => 'name', 'data' => json_encode([])]
+            );
+
+            $this->sendMessage(
+                $this->escapeMarkdown("📝 Entrez le nom du produit :"),
+                'MarkdownV2'
+            );
+
+        } catch (\Exception $e) {
+            Log::error('Erreur initProductSession', [
+                'error' => $e->getMessage(),
+                'trace' => $e->getTraceAsString()
+            ]);
+            $this->sendMessage("❌ Erreur système. Veuillez réessayer.");
         }
-        return $text;
     }
 
     protected function generateUniqueEmail($telegramId): string
@@ -286,6 +328,8 @@ class MessageHandler
     protected function registerAsCommercant(array $message)
     {
         try {
+            Log::debug('Début registerAsCommercant', ['message' => $message]);
+            
             $telegramId = $message['from']['id'];
             if (!$telegramId) {
                 throw new \Exception('ID Telegram manquant');
@@ -294,7 +338,7 @@ class MessageHandler
             // Recherche prioritaire par telegram_id
             $user = User::where('telegram_id', $telegramId)->first();
 
-            // Si non trouvé, recherche alternative
+            // Fallback par username
             if (!$user) {
                 $username = $message['from']['username'] ?? null;
                 if ($username) {
@@ -303,66 +347,35 @@ class MessageHandler
             }
 
             if (!$user) {
-                $this->sendMessage(
-                    "⚠️ Compte non trouvé. Veuillez d'abord :\n".
-                    "1. Envoyer /start pour créer un compte\n".
-                    "2. Puis réessayer /register_commercant",
-                    'Markdown'
-                );
+                $responseText = $this->escapeMarkdown("⚠️ Compte non trouvé. Veuillez d'abord :\n1. Envoyer /start pour créer un compte\n2. Puis réessayer /register_commercant");
+                $this->sendMessage($responseText, 'MarkdownV2');
                 return;
             }
 
-            // Mise à jour du telegram_id si nécessaire
-            if (!$user->telegram_id) {
-                $user->telegram_id = $telegramId;
-            }
-
+            // Mise à jour du rôle
             $user->role = 'commercant';
             $user->save();
 
-            $this->sendMessage(
-                "✅ Félicitations *{$user->name}* !\n".
+            $escapedName = $this->escapeMarkdown($user->name);
+            $successMessage = $this->escapeMarkdown(
+                "✅ Félicitations {$escapedName} !\n".
                 "Vous êtes maintenant enregistré comme commerçant.\n\n".
                 "Vous pouvez maintenant :\n".
-                "- Ajouter des produits avec /add_product\n".
-                "- Gérer votre boutique",
-                'Markdown'
+                "- Ajouter des produits avec /add_product".
+                "- Gérer votre boutique"
             );
+
+            Log::debug('Envoi message succès commerçant');
+            $this->sendMessage($successMessage, 'MarkdownV2');
 
         } catch (\Exception $e) {
             Log::error('Erreur registerAsCommercant', [
                 'error' => $e->getMessage(),
                 'trace' => $e->getTraceAsString()
             ]);
-            $this->sendMessage("❌ Une erreur technique est survenue. Veuillez réessayer.");
+            $errorMessage = $this->escapeMarkdown("❌ Une erreur technique est survenue. Veuillez réessayer.");
+            $this->sendMessage($errorMessage, 'MarkdownV2');
         }
-    }
-
-    protected function initProductSession(array $message)
-    {
-        $telegramId = $message['from']['id'];
-        $user = User::where('telegram_id', $telegramId)->first();
-
-        if (!$user) {
-            $this->sendMessage("❌ Vous devez d'abord créer un compte avec /start");
-            return;
-        }
-
-        if ($user->role !== 'commercant') {
-            $this->sendMessage(
-                "🚫 Réservé aux commerçants.\n".
-                "Pour devenir commerçant, envoyez /commercant",
-                'Markdown'
-            );
-            return;
-        }
-
-        ProductSession::updateOrCreate(
-            ['user_id' => $user->id],
-            ['step' => 'name', 'data' => json_encode([])]
-        );
-
-        $this->sendMessage("📝 Entrez le *nom du produit* :", 'Markdown');
     }
 
     protected function sendHelpMessage()
@@ -432,23 +445,14 @@ class MessageHandler
         return $response->json('result.file_path');
     }
 
-      protected function sendMessage(string $text, string $parseMode = null, array $replyMarkup = null)
+    protected function sendMessage(string $text, string $parseMode = null, array $replyMarkup = null)
     {
         try {
-            Log::debug('Tentative d\'envoi de message', [
-                'chat_id' => $this->chatId,
-                'text_length' => strlen($text),
-                'parse_mode' => $parseMode
-            ]);
-
             $payload = [
                 'chat_id' => $this->chatId,
                 'text' => $text,
+                'parse_mode' => 'MarkdownV2' // Forcé à MarkdownV2
             ];
-
-            if ($parseMode) {
-                $payload['parse_mode'] = $parseMode;
-            }
 
             if ($replyMarkup) {
                 $payload['reply_markup'] = json_encode($replyMarkup);
@@ -458,33 +462,19 @@ class MessageHandler
                 ->retry(3, 100)
                 ->post("https://api.telegram.org/bot{$this->token}/sendMessage", $payload);
 
-            Log::debug('Réponse API Telegram', [
-                'status' => $response->status(),
-                'response' => $response->json(),
-                'payload' => $payload
-            ]);
-
             if ($response->failed()) {
-                Log::error('Échec envoi message Telegram', [
-                    'status' => $response->status(),
-                    'error' => $response->body(),
-                    'payload' => $payload
-                ]);
-                throw new \Exception("Échec de l'envoi: " . $response->body());
+                throw new \Exception("Échec envoi: " . $response->body());
             }
 
             return $response->json();
 
         } catch (\Exception $e) {
-            Log::error('Exception dans sendMessage', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString()
+            // Fallback sans formatage si échec
+            Http::post("https://api.telegram.org/bot{$this->token}/sendMessage", [
+                'chat_id' => $this->chatId,
+                'text' => strip_tags($text) // Envoi brut sans formatage
             ]);
             throw $e;
         }
-    
-
-
-        Http::post("https://api.telegram.org/bot{$this->token}/sendMessage", $payload);
     }
 }
