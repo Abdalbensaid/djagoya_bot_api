@@ -16,15 +16,15 @@ class TelegramWebhookController extends Controller
         $this->telegramService = $telegramService;
     }
 
-    public function handleWebhook(Request $request)
+   public function handleWebhook(Request $request)
     {
         Log::debug('Payload Telegram reçu : ', $request->all());
 
         try {
             $this->validateTelegramWebhook($request);
-            
+
             $this->telegramService->handleWebhook($request->all());
-            
+
             return response()->json(['status' => 'success']);
             
         } catch (\Throwable $e) {
@@ -39,6 +39,7 @@ class TelegramWebhookController extends Controller
             );
         }
     }
+
 
     protected function validateTelegramWebhook(Request $request): void
     {

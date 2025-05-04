@@ -3,39 +3,38 @@
 namespace App\Services\Telegram;
 
 use App\Services\Telegram\Handlers\MessageHandler;
+use App\Services\Telegram\Commands\HelpCommand;
+use App\Services\Telegram\Commands\ProductsCommand;
+use App\Services\Telegram\Commands\RegisterCommercantCommand;
+use App\Services\Telegram\Commands\AddProductCommand;
+use App\Services\Telegram\Commands\MenuCommand;
 
 class TelegramService
 {
-   public function handleWebhook(array $data)
-{
-    if (isset($data['message'])) {
-        (new MessageHandler())->handle($data['message']);
-    } elseif (isset($data['callback_query'])) {
-        $this->handleCallback($data['callback_query']);
-    }
-}
-
-protected function handleCallback(array $callback)
-{
-    $chatId = $callback['message']['chat']['id'];
-    $data = $callback['data'];
-
-    if (str_starts_with($data, 'product_')) {
-        $productId = str_replace('product_', '', $data);
-        $product = \App\Models\Product::find($productId);
-
-        if ($product) {
-            $text = "🛍️ *{$product->name}*\n💰 Prix : {$product->price} FCFA";
-        } else {
-            $text = "Produit introuvable.";
+    public function handleWebhook(array $data)
+    {
+        if (isset($data['message'])) {
+            (new MessageHandler())->handle($data['message']);
+        } elseif (isset($data['callback_query'])) {
+            $this->handleCallback($data['callback_query']);
         }
+    }
 
-        Http::post("https://api.telegram.org/bot{$this->token}/sendMessage", [
-            'chat_id' => $chatId,
-            'text' => $text,
-            'parse_mode' => 'Markdown'
-        ]);
+    protected function handleCallback(array $callback)
+    {
+        $chatId = $callback['message']['chat']['id'];
+        $data = $callback['data'];
+
+        $handler = new MessageHandler($chatId); // Assure-toi que tu peux passer $chatId
+
+        match ($data) {
+            'products' => (new ProductsCommand($handler))->execute(),
+            'register_commercant' => (new RegisterCommercantCommand($handler))->execute(),
+            'add_product' => (new AddProductCommand($handler))->execute(),
+            'help' => (new HelpCommand($handler))->execute(),
+            'menu' => (new MenuCommand($handler))->execute(),
+            default => $handler->sendMessage("❌ Commande inconnue.")
+        };
     }
 }
 
-}
