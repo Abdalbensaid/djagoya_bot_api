@@ -3,10 +3,8 @@
 namespace App\Services\Telegram\Commands;
 
 use App\Models\User;
-use App\Models\Message;
 use App\Services\Telegram\Handlers\MessageHandler;
 use App\Services\Telegram\Helpers\TelegramHelper;
-use Illuminate\Support\Facades\Log;
 
 class StartCommand
 {
@@ -19,89 +17,33 @@ class StartCommand
 
     public function execute(array $message)
     {
-        Log::debug('Début handleStartCommand', ['message' => $message]);
-        
-        try {
-            $telegramId = $message['from']['id'];
-            Log::debug('ID Telegram', ['id' => $telegramId]);
-            
-            $username = $message['from']['username'] ?? null;
-            $name = trim(($message['from']['first_name'] ?? '').' '.($message['from']['last_name'] ?? ''));
-            Log::debug('Infos utilisateur', ['username' => $username, 'name' => $name]);
+        $telegramId = $message['from']['id'] ?? null;
+        $user = User::where('telegram_id', $telegramId)->first();
 
-            $user = User::where('telegram_id', $telegramId)->first();
-            Log::debug('Utilisateur trouvé par telegram_id', ['user' => $user ? $user->toArray() : null]);
+        $name = TelegramHelper::escapeMarkdownV2(
+            trim(($message['from']['first_name'] ?? '') . ' ' . ($message['from']['last_name'] ?? ''))
+        );
 
-            if (!$user && $username) {
-                $user = User::where('username', $username)->first();
-                Log::debug('Utilisateur trouvé par username', ['user' => $user ? $user->toArray() : null]);
-                if ($user) {
-                    $user->telegram_id = $telegramId;
-                    $user->save();
-                    Log::debug('Mise à jour telegram_id effectuée');
-                }
+        $text = "👋 *Bienvenue sur notre bot de e-commerce, {$name} !*\n\n" .
+                "Voici ce que vous pouvez faire :";
+
+        $buttons = [
+            [['text' => '🛍️ Voir les produits', 'callback_data' => 'products']],
+            [['text' => 'ℹ️ Aide', 'callback_data' => 'help']],
+        ];
+
+        if ($user) {
+            if ($user->role === 'commercant') {
+                $buttons[] = [['text' => '➕ Ajouter un produit', 'callback_data' => 'add_product']];
+            } else {
+                $buttons[] = [['text' => '📝 Devenir commerçant', 'callback_data' => 'register_commercant']];
             }
-
-            $isNewUser = false;
-            if (!$user) {
-                $userData = [
-                    'telegram_id' => $telegramId,
-                    'name' => $name,
-                    'username' => $username,
-                    'email' => $this->generateUniqueEmail($telegramId),
-                    'password' => bcrypt(uniqid()),
-                    'role' => 'client'
-                ];
-
-                $user = User::create($userData);
-                $isNewUser = true;
-                Log::debug('Nouvel utilisateur créé', ['user' => $user->toArray()]);
-            }
-
-            $escapedName = TelegramHelper::escapeMarkdownV2($name);
-            $welcomeMessage = $isNewUser
-                ? "👋 Bienvenue *{$escapedName}* dans notre boutique\\!\n\n"
-                : "👋 Bon retour *{$escapedName}*\\!\n\n";
-
-            $welcomeMessage .= "*Commandes disponibles* \\:\n"
-                . "• /products - Voir nos produits\n"
-                . ($user->role === 'commercant' 
-                    ? "• /add_product - Ajouter un produit\n" 
-                    : "• /register_commercant - Devenir commerçant\n")
-                . "• /help - Aide";
-
-            Log::debug('Message formaté avant envoi', ['message' => $welcomeMessage]);
-
-            Message::create([
-                'user_id' => $user->id,
-                'message' => $message['text'],
-                'is_from_bot' => false
-            ]);
-
-            $this->handler->sendMessage($welcomeMessage, 'MarkdownV2');
-
-        } catch (\Exception $e) {
-            Log::error('Erreur critique dans handleStartCommand', [
-                'error' => $e->getMessage(),
-                'trace' => $e->getTraceAsString(),
-                'message_data' => $message
-            ]);
-            
-            $this->handler->sendMessage("❌ Une erreur est survenue lors de votre inscription. Veuillez réessayer.");
-        }
-    }
-
-    protected function generateUniqueEmail($telegramId): string
-    {
-        $baseEmail = "tg_{$telegramId}@telegram.example";
-        $email = $baseEmail;
-        $count = 1;
-
-        while (User::where('email', $email)->exists()) {
-            $email = "tg_{$telegramId}_{$count}@telegram.example";
-            $count++;
+        } else {
+            $buttons[] = [['text' => '🚀 Créer un compte', 'callback_data' => 'register']];
         }
 
-        return $email;
+        $keyboard = ['inline_keyboard' => $buttons];
+
+        $this->handler->sendMessage($text, 'MarkdownV2', $keyboard);
     }
 }

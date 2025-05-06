@@ -16,28 +16,32 @@ class ProductsCommand
         $this->handler = $handler;
     }
 
+   // Dans la classe ProductsCommand
     public function execute()
     {
         $products = Product::latest()->take(5)->get();
 
         if ($products->isEmpty()) {
-            $this->handler->sendMessage("ℹ️ Aucun produit disponible pour le moment\\.");
+            $this->handler->sendMessage("ℹ️ Aucun produit disponible pour le moment.");
             return;
         }
 
         $keyboard = $products->map(function ($product) {
             return [[
+                'image_url' => $product->image_url,
                 'text' => "{$product->name} - {$product->price} FCFA",
                 'callback_data' => "product_{$product->id}"
             ]];
         })->toArray();
 
         $this->handler->sendMessage(
-            TelegramHelper::escapeMarkdownV2("🛍️ *Nos produits* \\: Sélectionnez\\-en un"),
+            TelegramHelper::escapeMarkdownV2("🛍️ *Nos produits* : Sélectionnez\-en un"),
             'MarkdownV2',
             ['inline_keyboard' => $keyboard]
         );
+
     }
+
 
     public function handleProductSelection($userId, $productId, $messageId)
     {

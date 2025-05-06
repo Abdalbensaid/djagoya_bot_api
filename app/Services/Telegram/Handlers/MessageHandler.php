@@ -17,11 +17,13 @@ class MessageHandler
     protected $token;
     protected $chatId;
 
-    public function __construct()
+    public function __construct($chatId = null)
     {
         $this->token = config('services.telegram.bot_token');
+        $this->chatId = $chatId;
         Log::debug('Token Telegram chargé', ['token' => substr($this->token, 0, 5) . '...']);
     }
+
 
     public function handle(array $payload)
     {
@@ -53,9 +55,11 @@ class MessageHandler
                 case '/start':
                     (new StartCommand($this))->execute($message);
                     break;
+                    // Dans TelegramService.php
                     case '/products':
-                        (new ProductsCommand($this))->execute();
+                        (new ProductsCommand($this))->execute();  // Pas d'argument passé ici
                         break;
+
                     case '/register_commercant':
                         (new RegisterCommercantCommand($this))->execute($message);
                         break;
@@ -63,7 +67,7 @@ class MessageHandler
                         (new AddProductCommand($this))->execute($message);
                         break;
                     case '/help':
-                        (new HelpCommand($this))->execute();
+                        (new HelpCommand($this))->execute($message); // <- ici on passe $message
                         break;
                     case '/stop':
                         $this->sendMessage("Merci d'avoir utilisé notre service. À bientôt !");
@@ -75,20 +79,31 @@ class MessageHandler
 
     public function handleCallbackQuery($callbackQuery)
     {
-        $callbackData = $callbackQuery['data'];  // Récupère la callback_data
-        $userId = $callbackQuery['from']['id'];  // Récupère l'ID de l'utilisateur
-        $messageId = $callbackQuery['message']['message_id'];  // ID du message auquel on répond
+         if (!isset($callbackQuery['message']['chat']['id'])) {
+        Log::error('Chat ID manquant dans le callback', $callbackQuery);
+        return;
+    }
+    
+    $this->chatId = $callbackQuery['message']['chat']['id'];
+
+        $callbackData = $callbackQuery['data'];
+        $userId = $callbackQuery['from']['id'];
+        $messageId = $callbackQuery['message']['message_id'];
+
+        // Fix : définir le chatId
+        $this->chatId = $callbackQuery['message']['chat']['id'];
 
         if (strpos($callbackData, 'buy_') === 0) {
-            $productId = substr($callbackData, 4);  // Extrait l'ID du produit
+            $productId = substr($callbackData, 4);
             $this->handleProductPurchase($userId, $productId, $messageId);
         } elseif (strpos($callbackData, 'fav_') === 0) {
-            $productId = substr($callbackData, 4);  // Extrait l'ID du produit
+            $productId = substr($callbackData, 4);
             $this->handleAddToFavorites($userId, $productId, $messageId);
         } else {
-            $this->handler->sendMessage("❌ Commande non reconnue.", 'MarkdownV2');
+            $this->sendMessage("❌ Commande non reconnue.", 'MarkdownV2');
         }
     }
+
 
     public function sendDefaultResponse(string $message = null)
     {
@@ -103,7 +118,8 @@ class MessageHandler
         $user = User::where('telegram_id', $userId)->first();
 
         // Logique d'achat, mise à jour de la commande, envoi de confirmation, etc.
-        $this->handler->sendMessage("✅ Vous avez acheté *{$product->name}* pour *{$product->price} FCFA*.", 'MarkdownV2');
+        $this->sendMessage("✅ Vous avez acheté *{$product->name}* pour *{$product->price} FCFA*.", 'MarkdownV2');
+
     }
 
     public function handleAddToFavorites($userId, $productId, $messageId)
@@ -113,44 +129,64 @@ class MessageHandler
         $user = User::where('telegram_id', $userId)->first();
 
         // Ajout aux favoris, envoi de confirmation, etc.
-        $this->handler->sendMessage("❤️ *{$product->name}* a été ajouté à vos favoris.", 'MarkdownV2');
+        $this->sendMessage("❤️ *{$product->name}* a été ajouté à vos favoris.", 'MarkdownV2');
+
     }
+
 
     public function sendMessage(string $text, string $parseMode = 'MarkdownV2', array $replyMarkup = null)
-    {
-        try {
-            if ($parseMode === 'MarkdownV2') {
-                $text = TelegramHelper::escapeMarkdownV2($text);
-            }
+{
+     if (is_null($this->chatId)) {
+        Log::error('Chat ID est null. Message non envoyé.', ['text' => $text]);
+        return;
+    }
+    try {
+        // Vérifier si le chat existe toujours
+        $response = Http::get("https://api.telegram.org/bot{$this->token}/getChat", [
+            'chat_id' => $this->chatId
+        ]);
 
-            $payload = [
-                'chat_id' => $this->chatId,
-                'text' => $text,
-                'parse_mode' => $parseMode,
-            ];
+        if ($response->failed()) {
+            Log::error('Erreur vérification chat_id', ['chat_id' => $this->chatId]);
+            return;
+        }
 
-            if (!is_null($replyMarkup)) {
-                $payload['reply_markup'] = json_encode($replyMarkup);
-            }
+        // Échapper le texte en MarkdownV2
+        if ($parseMode === 'MarkdownV2') {
+            $text = TelegramHelper::escapeMarkdownV2($text);
+        }
 
-            $response = Http::timeout(10)
-                ->retry(2, 100)
-                ->post("https://api.telegram.org/bot{$this->token}/sendMessage", $payload);
+        $payload = [
+            'chat_id' => $this->chatId,
+            'text' => $text,
+            'parse_mode' => $parseMode,
+        ];
 
-            if ($response->failed()) {
-                return $this->sendPlainMessage($text);
-            }
+        if (!is_null($replyMarkup)) {
+            $payload['reply_markup'] = json_encode($replyMarkup);
+        }
 
-            return $response->json();
+        $response = Http::timeout(10)
+            ->retry(2, 100)
+            ->post("https://api.telegram.org/bot{$this->token}/sendMessage", $payload);
 
-        } catch (\Exception $e) {
-            Log::error('Échec sendMessage', [
-                'error' => $e->getMessage(),
-                'text' => $text
-            ]);
+        if ($response->failed()) {
+            Log::error('Erreur envoi message', ['error' => $response->json()]);
             return $this->sendPlainMessage($text);
         }
+
+        return $response->json();
+
+    } catch (\Exception $e) {
+        Log::error('Échec sendMessage', [
+            'error' => $e->getMessage(),
+            'text' => $text
+        ]);
+        return $this->sendPlainMessage($text);
     }
+}
+
+
 
 
     public function sendPlainMessage(string $text)

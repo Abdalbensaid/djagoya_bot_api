@@ -20,21 +20,30 @@ class TelegramService
         }
     }
 
-    protected function handleCallback(array $callback)
-    {
-        $chatId = $callback['message']['chat']['id'];
-        $data = $callback['data'];
-
-        $handler = new MessageHandler($chatId); // Assure-toi que tu peux passer $chatId
-
-        match ($data) {
-            'products' => (new ProductsCommand($handler))->execute(),
-            'register_commercant' => (new RegisterCommercantCommand($handler))->execute(),
-            'add_product' => (new AddProductCommand($handler))->execute(),
-            'help' => (new HelpCommand($handler))->execute(),
-            'menu' => (new MenuCommand($handler))->execute(),
-            default => $handler->sendMessage("❌ Commande inconnue.")
-        };
+   protected function handleCallback(array $callback)
+{
+    if (!isset($callback['message']['chat']['id'])) {
+        \Log::error('Erreur vérification chat_id', ['chat_id' => null, 'callback' => $callback]);
+        return;
     }
+
+    $chatId = $callback['message']['chat']['id'];
+    $data = $callback['data'];
+
+    $handler = new MessageHandler($chatId); // Assure-toi que le constructeur accepte bien $chatId
+
+    match ($data) {
+        'products' => (new ProductsCommand($handler))->execute(),
+        'register_commercant' => (new RegisterCommercantCommand($handler))->execute(),
+        'add_product' => (new AddProductCommand($handler))->execute(),
+        'help' => (new HelpCommand($handler))->execute([
+                'from' => $callback['from'] ?? [],
+            ]),
+
+        'menu' => (new MenuCommand($handler))->execute(),
+        default => $handler->sendMessage("❌ Commande inconnue.")
+    };
+}
+
 }
 

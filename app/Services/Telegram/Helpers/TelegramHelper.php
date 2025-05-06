@@ -5,15 +5,16 @@ namespace App\Services\Telegram\Helpers;
 class TelegramHelper
 {
     public static function escapeMarkdownV2(string $text): string
-    {
-        $specialChars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'];
+{
+    $specialChars = ['_', '*', '[', ']', '(', ')', '~', '`', '>', '#', '+', '-', '=', '|', '{', '}', '.', '!'];
 
-        foreach ($specialChars as $char) {
-            $text = str_replace($char, '' . $char, $text);
-        }
-
-        return $text;
+    foreach ($specialChars as $specialChar) {
+        $text = str_replace($specialChar, '\\'.$specialChar, $text);
     }
+
+    return $text;
+}
+
 
     public static function formatWithEmoji(string $text, string $emoji): string
     {
