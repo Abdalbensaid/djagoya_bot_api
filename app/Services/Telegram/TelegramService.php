@@ -34,8 +34,13 @@ class TelegramService
 
     match ($data) {
         'products' => (new ProductsCommand($handler))->execute(),
+        
         'register_commercant' => (new RegisterCommercantCommand($handler))->execute(),
-        'add_product' => (new AddProductCommand($handler))->execute(),
+
+        'add_product' => (new AddProductCommand($handler))->execute([
+                'from' => $callback['from'] ?? [],
+            ]),
+
         'help' => (new HelpCommand($handler))->execute([
                 'from' => $callback['from'] ?? [],
             ]),

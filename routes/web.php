@@ -14,5 +14,7 @@ use Illuminate\Support\Facades\Route;
 */
 
 Route::get('/', function () {
-    return view('welcome');
+    $products = \App\Models\Product::latest()->take(5)->get();
+    
+    return view('products', ['products' => $products]);
 });

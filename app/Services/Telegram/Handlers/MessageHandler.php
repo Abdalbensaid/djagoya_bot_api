@@ -4,6 +4,8 @@ namespace App\Services\Telegram\Handlers;
 
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Http;
+use App\Models\Product;
+use App\Models\User;
 use App\Services\Telegram\Commands\StartCommand;
 use App\Services\Telegram\Commands\ProductsCommand;
 use App\Services\Telegram\Commands\RegisterCommercantCommand;
@@ -101,6 +103,100 @@ class MessageHandler
             $this->handleAddToFavorites($userId, $productId, $messageId);
         } else {
             $this->sendMessage("❌ Commande non reconnue.", 'MarkdownV2');
+        }
+         $callbackData = $callbackQuery['data'];
+
+        match ($callbackData) {
+            'products' => (new ProductsCommand($this))->execute(),
+            'start' => (new StartCommand($this))->execute(),
+            'add_product' => (new AddProductCommand($this))->execute(),
+            default => $this->handleProductCallback($callbackData, $callbackQuery)
+    };
+    }
+
+    protected function handleProductCallback(string $callbackData, array $callbackQuery)
+    {
+        if (str_starts_with($callbackData, 'buy_')) {
+            $productId = substr($callbackData, 4);
+            $this->handleProductPurchase($callbackQuery['from']['id'], $productId, $callbackQuery['message']['message_id']);
+        } elseif (str_starts_with($callbackData, 'fav_')) {
+            $productId = substr($callbackData, 4);
+            $this->handleAddToFavorites($callbackQuery['from']['id'], $productId, $callbackQuery['message']['message_id']);
+        } elseif (str_starts_with($callbackData, 'details_')) {
+            $productId = substr($callbackData, 8);
+            $this->showProductDetails($productId, $callbackQuery['message']['chat']['id']);
+        } else {
+            $this->sendMessage("❌ Action non reconnue", 'MarkdownV2');
+        }
+    }
+
+    public function showProductDetails($productId, $chatId)
+    {
+        $product = Product::with('user')->find($productId);
+        
+        if (!$product) {
+            $this->sendMessage("❌ Produit introuvable");
+            return;
+        }
+
+        $message = TelegramHelper::escapeMarkdownV2(
+            "📋 *Détails du produit*\n\n" .
+            "🛒 *Nom :* {$product->name}\n" .
+            "💰 *Prix :* {$product->price} FCFA\n" .
+            "📦 *Stock :* " . ($product->stock ?? 'Disponible') . "\n" .
+            "👤 *Vendeur :* " . ($product->user->name ?? 'Anonyme') . "\n\n" .
+            "📝 *Description :*\n{$product->description}"
+        );
+
+        $this->sendMessage(
+            $message,
+            'MarkdownV2',
+            [
+                'inline_keyboard' => [
+                    [
+                        ['text' => "⬅️ Retour aux produits", 'callback_data' => "products"],
+                        ['text' => "🛒 Acheter maintenant", 'callback_data' => "buy_{$productId}"]
+                    ]
+                ]
+            ]
+        );
+    }
+    public function sendMediaGroup(array $media, array $options = [])
+    {
+        try {
+            $payload = [
+                'chat_id' => $this->chatId,
+                'media' => json_encode($media),
+            ] + $options;
+
+            $response = Http::timeout(15)
+                ->retry(3, 200)
+                ->post("https://api.telegram.org/bot{$this->token}/sendMediaGroup", $payload);
+
+            if ($response->failed()) {
+                Log::error('Échec envoi media group', ['response' => $response->body()]);
+                // Fallback: envoyer la première image seulement
+                if (!empty($media[0]['media'])) {
+                    $this->sendPhoto(
+                        $media[0]['media'],
+                        $media[0]['caption'] ?? '',
+                        $media[0]['parse_mode'] ?? null
+                    );
+                }
+            }
+
+            return $response->json();
+
+        } catch (\Exception $e) {
+            Log::error('Exception sendMediaGroup', ['error' => $e->getMessage()]);
+            if (!empty($media[0]['media'])) {
+                $this->sendPlainMessage("📷 Carrousel d'images partiellement envoyé");
+                $this->sendPhoto(
+                    $media[0]['media'],
+                    $media[0]['caption'] ?? '',
+                    $media[0]['parse_mode'] ?? null
+                );
+            }
         }
     }
 
@@ -204,6 +300,17 @@ class MessageHandler
                 'error' => $e->getMessage()
             ]);
         }
+    }
+    public function sendPhoto(string $photoUrl, string $caption, string $parseMode = 'MarkdownV2', array $options = [])
+    {
+        $params = array_merge([
+            'chat_id' => $this->chatId,
+            'photo' => $photoUrl,
+            'caption' => $caption,
+            'parse_mode' => $parseMode,
+        ], $options);
+
+        Http::post("https://api.telegram.org/bot" . config('services.telegram.bot_token') . "/sendPhoto", $params);
     }
 
     public function sendPhotoWithCaption($chatId, $photoUrl, $caption, $parseMode = 'MarkdownV2')
